@@ -10,24 +10,29 @@ import numpy as np
 import keras.backend as K
 from io import BytesIO
 import matplotlib.pyplot as plt
-import firebase_admin
-from firebase_admin import credentials, storage
 from datetime import datetime
+import cloudinary
+from cloudinary.uploader import upload
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 
 app = Flask(__name__)
 
-# Initialize Firebase Admin SDK
-cred = credentials.Certificate("firebase_credential.json")
-firebase_admin.initialize_app(cred, {"storageBucket": "model-preview-backend.appspot.com"})
-bucket = storage.bucket()
+# Cloudinary configuration
+cloudinary.config(
+    cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
+    api_key=os.getenv("CLOUDINARY_API_KEY"),
+    api_secret=os.getenv("CLOUDINARY_API_SECRET")
+)
 
-def upload_to_firebase(image_path, destination_path):
-    # Upload the image to Firebase Storage
-    blob = bucket.blob(destination_path)
-    blob.upload_from_filename(image_path)
+def upload_to_cloudinary(image_path):
+    # Upload the image to Cloudinary
+    result = upload(image_path)
 
     # Get the public URL of the uploaded image
-    image_url = blob.public_url
+    image_url = result['secure_url']
 
     return image_url
 
@@ -95,9 +100,52 @@ def visualize_intermediate_activations(base_model, layer_names, img_url, img_siz
     concatenated_img_path = 'concatenated_activations.png'
     Image.fromarray((concatenated_img * 255).astype(np.uint8)).save(concatenated_img_path)
     unique_filename = generate_unique_filename(prefix=destination_prefix)
-    image_url = upload_to_firebase(concatenated_img_path, unique_filename)
+    image_url = upload_to_cloudinary(concatenated_img_path)
 
     return image_url
+
+def generate_heatmap_and_upload(model, image_path):
+    # Load InceptionV3 model
+    inception_model = model
+
+    # Read and preprocess the input image
+    img = cv2.imread(image_path)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    img = cv2.resize(img, (299, 299))
+    X = np.expand_dims(img, axis=0).astype(np.float32)
+    X = preprocess_input(X)
+
+    # Create a model with intermediate layers
+    conv_output = inception_model.get_layer("mixed10").output
+    pred_output = inception_model.output
+    model = Model(inception_model.input, outputs=[conv_output, pred_output])
+
+    # Get intermediate layer activations and predictions
+    conv, pred = model.predict(X)
+
+    # Get the target class and weights
+    target = np.argmax(pred, axis=1).squeeze()
+    w, b = model.get_layer("predictions").weights
+    weights = w[:, target].numpy()
+    
+    # Generate the heatmap
+    heatmap = conv.squeeze() @ weights
+
+    # Update scale for visualization
+    scale = 299 / 8
+
+    # Save the heatmap image
+    heatmap_image_path = 'heatmap.png'
+    plt.imsave(heatmap_image_path, zoom(heatmap, zoom=(scale, scale)), cmap='jet', format='png', vmin=0, vmax=1)
+
+    # Upload the heatmap image to Cloudinary
+    heatmap_url = upload_to_cloudinary(heatmap_image_path, cloudinary_config)
+
+    # Remove the locally saved heatmap image
+    os.remove(heatmap_image_path)
+
+    return heatmap_url
+
 
 @app.route('/predict_inception', methods=['POST'])
 def predict_inception():
@@ -108,9 +156,11 @@ def predict_inception():
         predictions = inception_model.predict(img_array)
         decoded_predictions = decode_predictions_custom(predictions, labels=['2-1-1', '2-1-2', '2-1-3', '2-2-1', '2-2-2', '2-2-3', '2-3-3', '3-1-1', '3-1-2', '3-1-3', '3-2-1', '3-2-2', '3-2-3', '3-3-2', '3-3-3', '4-2-2', 'Arrested', 'Early', 'Morula'])
         layer_names_cnn = ['conv2d', 'conv2d_1', 'conv2d_2', 'conv2d_3']
+        layer_names_activation = ['block1_conv1_act', 'block1_conv2_act', 'block2_sepconv2_act', 'block3_sepconv1_act']
         result_path_cnn = visualize_intermediate_activations(xception_model, layer_names_cnn, img_path)
-        print(f"Concatenated activations saved at: {result_path}")
-        return jsonify({'predictions': decoded_predictions, 'image_url_cnn': result_path_cnn})
+        result_path_act = visualize_intermediate_activations(xception_model, layer_names_activation, img_path)
+        print(f"Concatenated activations saved at: {result_path_cnn}")
+        return jsonify({'predictions': decoded_predictions, 'image_url_cnn': result_path_cnn, 'image_url_act': result_path_act})
     except Exception as e:
         return jsonify({'error': str(e)})
 
@@ -122,10 +172,12 @@ def predict_xception():
         img_array = preprocess_input_image(img_path)
         predictions = xception_model.predict(img_array)
         decoded_predictions = decode_predictions_custom(predictions, labels=['2-1-1', '2-1-2', '2-1-3', '2-2-1', '2-2-2', '2-2-3', '2-3-3', '3-1-1', '3-1-2', '3-1-3', '3-2-1', '3-2-2', '3-2-3', '3-3-2', '3-3-3', '4-2-2', 'Arrested', 'Early', 'Morula'])
-        layer_names_cnn = ['block1_conv1_act', 'block1_conv2_act', 'block2_sepconv2_act', 'block3_sepconv1_act']
+        layer_names_cnn = ['block1_conv1', 'block1_conv2', 'conv2d', 'conv2d_1']
+        layer_names_activation = ['block1_conv1_act', 'block1_conv2_act', 'block2_sepconv2_act', 'block3_sepconv1_act']
         result_path_cnn = visualize_intermediate_activations(xception_model, layer_names_cnn, img_path)
-        print(f"Concatenated activations saved at: {result_path}")
-        return jsonify({'predictions': decoded_predictions, 'image_url_cnn': result_path_cnn})
+        result_path_act = visualize_intermediate_activations(xception_model, layer_names_activation, img_path)
+        print(f"Concatenated activations saved at: {result_path_cnn}")
+        return jsonify({'predictions': decoded_predictions, 'image_url_cnn': result_path_cnn, 'image_url_act': result_path_act})
     except Exception as e:
         return jsonify({'error': str(e)})
 
