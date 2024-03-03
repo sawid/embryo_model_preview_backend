@@ -15,6 +15,11 @@ import cloudinary
 from cloudinary.uploader import upload
 from dotenv import load_dotenv
 import os
+import cv2
+from scipy.ndimage import zoom
+from tensorflow.keras.applications import imagenet_utils
+import tensorflow as tf
+from tensorflow.keras.applications import InceptionV3
 
 load_dotenv()
 
@@ -26,6 +31,45 @@ cloudinary.config(
     api_key=os.getenv("CLOUDINARY_API_KEY"),
     api_secret=os.getenv("CLOUDINARY_API_SECRET")
 )
+
+def generate_and_upload_heatmap(image_url):
+    # Download image from URL
+    response = requests.get(image_url)
+    img = Image.open(BytesIO(response.content)).convert('RGB')
+    img = img.resize((299, 299))
+    img_array = image.img_to_array(img)
+    img_array = np.expand_dims(img_array, axis=0)
+    img = preprocess_input(img_array)
+
+    # Load InceptionV3 model
+    inception_model = InceptionV3()
+
+    # Modify the model to get intermediate layer output
+    conv_output = inception_model.get_layer("mixed10").output
+    pred_output = inception_model.output
+    model = models.Model(inception_model.input, outputs=[conv_output, pred_output])
+
+    # Get intermediate layer output and predictions
+    conv, pred = model.predict(img)
+
+    # Get target class
+    target = np.argmax(pred, axis=1).squeeze()
+    w, b = model.get_layer("predictions").weights
+    weights = w[:, target].numpy()
+    heatmap = conv.squeeze() @ weights
+
+    # Normalize the heatmap
+    heatmap = (heatmap - np.min(heatmap)) / (np.max(heatmap) - np.min(heatmap))
+
+    # Save the normalized heatmap as an image
+    heatmap_path = 'heatmap.png'
+    cv2.imwrite(heatmap_path, (heatmap * 255).astype(np.uint8))
+
+    # Upload the heatmap image to Cloudinary using the provided function
+    heatmap_cloud_url = upload_to_cloudinary(heatmap_path)
+
+    return heatmap_cloud_url
+
 
 def upload_to_cloudinary(image_path):
     # Upload the image to Cloudinary
@@ -104,49 +148,6 @@ def visualize_intermediate_activations(base_model, layer_names, img_url, img_siz
 
     return image_url
 
-def generate_heatmap_and_upload(model, image_path):
-    # Load InceptionV3 model
-    inception_model = model
-
-    # Read and preprocess the input image
-    img = cv2.imread(image_path)
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    img = cv2.resize(img, (299, 299))
-    X = np.expand_dims(img, axis=0).astype(np.float32)
-    X = preprocess_input(X)
-
-    # Create a model with intermediate layers
-    conv_output = inception_model.get_layer("mixed10").output
-    pred_output = inception_model.output
-    model = Model(inception_model.input, outputs=[conv_output, pred_output])
-
-    # Get intermediate layer activations and predictions
-    conv, pred = model.predict(X)
-
-    # Get the target class and weights
-    target = np.argmax(pred, axis=1).squeeze()
-    w, b = model.get_layer("predictions").weights
-    weights = w[:, target].numpy()
-    
-    # Generate the heatmap
-    heatmap = conv.squeeze() @ weights
-
-    # Update scale for visualization
-    scale = 299 / 8
-
-    # Save the heatmap image
-    heatmap_image_path = 'heatmap.png'
-    plt.imsave(heatmap_image_path, zoom(heatmap, zoom=(scale, scale)), cmap='jet', format='png', vmin=0, vmax=1)
-
-    # Upload the heatmap image to Cloudinary
-    heatmap_url = upload_to_cloudinary(heatmap_image_path, cloudinary_config)
-
-    # Remove the locally saved heatmap image
-    os.remove(heatmap_image_path)
-
-    return heatmap_url
-
-
 @app.route('/predict_inception', methods=['POST'])
 def predict_inception():
     try:
@@ -156,11 +157,12 @@ def predict_inception():
         predictions = inception_model.predict(img_array)
         decoded_predictions = decode_predictions_custom(predictions, labels=['2-1-1', '2-1-2', '2-1-3', '2-2-1', '2-2-2', '2-2-3', '2-3-3', '3-1-1', '3-1-2', '3-1-3', '3-2-1', '3-2-2', '3-2-3', '3-3-2', '3-3-3', '4-2-2', 'Arrested', 'Early', 'Morula'])
         layer_names_cnn = ['conv2d', 'conv2d_1', 'conv2d_2', 'conv2d_3']
-        layer_names_activation = ['block1_conv1_act', 'block1_conv2_act', 'block2_sepconv2_act', 'block3_sepconv1_act']
-        result_path_cnn = visualize_intermediate_activations(xception_model, layer_names_cnn, img_path)
-        result_path_act = visualize_intermediate_activations(xception_model, layer_names_activation, img_path)
+        layer_names_activation = ['activation', 'activation_1', 'activation_2', 'activation_3']
+        result_path_cnn = visualize_intermediate_activations(inception_model, layer_names_cnn, img_path)
+        result_path_act = visualize_intermediate_activations(inception_model, layer_names_activation, img_path)
+        heatmap_url = generate_and_upload_heatmap(img_path)
         print(f"Concatenated activations saved at: {result_path_cnn}")
-        return jsonify({'predictions': decoded_predictions, 'image_url_cnn': result_path_cnn, 'image_url_act': result_path_act})
+        return jsonify({'predictions': decoded_predictions, 'image_url_cnn': result_path_cnn, 'image_url_act': result_path_act, 'heatmap_url': heatmap_url})
     except Exception as e:
         return jsonify({'error': str(e)})
 
