@@ -83,6 +83,57 @@ def generate_and_upload_heatmap(image_url):
 
     return overlay_cloud_url
 
+def generate_and_upload_heatmap_xception(image_url):
+    # Download image from URL
+    response = requests.get(image_url)
+    img = Image.open(BytesIO(response.content)).convert('RGB')
+    img = img.resize((299, 299))
+    img_array = image.img_to_array(img)
+    img_array = np.expand_dims(img_array, axis=0)
+    img = preprocess_input(img_array)
+
+    # Load Xception model
+    xception_model = Xception()
+
+    # Modify the model to get intermediate layer output
+    conv_output = xception_model.get_layer("block14_sepconv2_act").output  # Choose the appropriate layer for Xception
+    pred_output = xception_model.output
+    model = models.Model(xception_model.input, outputs=[conv_output, pred_output])
+
+    # Get intermediate layer output and predictions
+    conv, pred = model.predict(img)
+
+    # Get target class
+    target = np.argmax(pred, axis=1).squeeze()
+    w, b = model.get_layer("predictions").weights
+    weights = w[:, target].numpy()
+    heatmap = conv.squeeze() @ weights
+
+    # Normalize the heatmap
+    heatmap = (heatmap - np.min(heatmap)) / (np.max(heatmap) - np.min(heatmap))
+
+    # Resize the heatmap to match the original image size
+    heatmap = cv2.resize(heatmap, (img_array.shape[2], img_array.shape[1]))
+
+    # Convert heatmap to BGR format
+    heatmap_bgr = cv2.applyColorMap(np.uint8(255 * heatmap), cv2.COLORMAP_JET)
+
+    # Convert heatmap to the same data type as the original image
+    heatmap_bgr = heatmap_bgr.astype(img_array[0].dtype)
+
+    # Blend the heatmap with the original image
+    alpha = 0.5  # Adjust the alpha value for blending
+    overlay = cv2.addWeighted(img_array[0], 1 - alpha, heatmap_bgr, alpha, 0)
+
+    # Save the result
+    overlay_path = 'heatmap_overlay.png'
+    cv2.imwrite(overlay_path, overlay)
+
+    # Upload the overlaid image to Cloudinary using the provided function
+    overlay_cloud_url = upload_to_cloudinary(overlay_path)
+
+    return overlay_cloud_url
+
 def upload_to_cloudinary(image_path):
     # Upload the image to Cloudinary
     result = upload(image_path)
@@ -190,8 +241,9 @@ def predict_xception():
         layer_names_activation = ['block1_conv1_act', 'block1_conv2_act', 'block2_sepconv2_act', 'block3_sepconv1_act']
         result_path_cnn = visualize_intermediate_activations(xception_model, layer_names_cnn, img_path)
         result_path_act = visualize_intermediate_activations(xception_model, layer_names_activation, img_path)
+        heatmap_url = generate_and_upload_heatmap_xception(img_path)
         print(f"Concatenated activations saved at: {result_path_cnn}")
-        return jsonify({'predictions': decoded_predictions, 'image_url_cnn': result_path_cnn, 'image_url_act': result_path_act})
+        return jsonify({'predictions': decoded_predictions, 'image_url_cnn': result_path_cnn, 'image_url_act': result_path_act, 'heatmap_url': heatmap_url})
     except Exception as e:
         return jsonify({'error': str(e)})
 
