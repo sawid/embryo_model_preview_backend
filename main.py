@@ -61,15 +61,27 @@ def generate_and_upload_heatmap(image_url):
     # Normalize the heatmap
     heatmap = (heatmap - np.min(heatmap)) / (np.max(heatmap) - np.min(heatmap))
 
-    # Save the normalized heatmap as an image
-    heatmap_path = 'heatmap.png'
-    cv2.imwrite(heatmap_path, (heatmap * 255).astype(np.uint8))
+    # Resize the heatmap to match the original image size
+    heatmap = cv2.resize(heatmap, (img_array.shape[2], img_array.shape[1]))
 
-    # Upload the heatmap image to Cloudinary using the provided function
-    heatmap_cloud_url = upload_to_cloudinary(heatmap_path)
+    # Convert heatmap to BGR format
+    heatmap_bgr = cv2.applyColorMap(np.uint8(255 * heatmap), cv2.COLORMAP_JET)
 
-    return heatmap_cloud_url
+    # Convert heatmap to the same data type as the original image
+    heatmap_bgr = heatmap_bgr.astype(img_array[0].dtype)
 
+    # Blend the heatmap with the original image
+    alpha = 0.5  # Adjust the alpha value for blending
+    overlay = cv2.addWeighted(img_array[0], 1 - alpha, heatmap_bgr, alpha, 0)
+
+    # Save the result
+    overlay_path = 'heatmap_overlay.png'
+    cv2.imwrite(overlay_path, overlay)
+
+    # Upload the overlaid image to Cloudinary using the provided function
+    overlay_cloud_url = upload_to_cloudinary(overlay_path)
+
+    return overlay_cloud_url
 
 def upload_to_cloudinary(image_path):
     # Upload the image to Cloudinary
