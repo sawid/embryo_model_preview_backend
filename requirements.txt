@@ -1,0 +1,10 @@
+Flask==3.0.2
+tensorflow==2.13.1
+pillow==10.2.0
+numpy==1.22.0
+keras==2.13.1
+matplotlib==3.7.5
+cloudinary==1.39.0
+python-dotenv==1.0.1
+opencv-python==4.9.0.80
+scipy==1.10.1

@@ -1,5 +1,6 @@
 # app.py
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 from tensorflow.keras.models import load_model
 from tensorflow.keras.applications.xception import Xception, preprocess_input, decode_predictions
 from tensorflow.keras.preprocessing import image
@@ -24,6 +25,7 @@ from tensorflow.keras.applications import InceptionV3
 load_dotenv()
 
 app = Flask(__name__)
+CORS(app, resources={r"/predict_inception": {"origins": "*"}, r"/predict_xception": {"origins": "*"}})
 
 # Cloudinary configuration
 cloudinary.config(
@@ -258,7 +260,7 @@ def predict_inception():
         result_path_act = visualize_intermediate_activations(inception_model, layer_names_activation, img_path)
         heatmap_url = generate_and_upload_heatmap(img_path)
         print(f"Concatenated activations saved at: {result_path_cnn}")
-        return jsonify({'predictions': decoded_predictions, 'image_url_cnn': result_path_cnn, 'image_url_act': result_path_act, 'heatmap_url': heatmap_url})
+        return jsonify({'predictions': decoded_predictions, 'image_url_cnn': result_path_cnn, 'image_url_act': result_path_act, 'heatmap_url': heatmap_url, 'original_image_url': img_path})
     except Exception as e:
         return jsonify({'error': str(e)})
 
@@ -276,7 +278,7 @@ def predict_xception():
         result_path_act = visualize_intermediate_activations(xception_model, layer_names_activation, img_path)
         heatmap_url = generate_and_upload_heatmap_xception(img_path)
         print(f"Concatenated activations saved at: {result_path_cnn}")
-        return jsonify({'predictions': decoded_predictions, 'image_url_cnn': result_path_cnn, 'image_url_act': result_path_act, 'heatmap_url': heatmap_url})
+        return jsonify({'predictions': decoded_predictions, 'image_url_cnn': result_path_cnn, 'image_url_act': result_path_act, 'heatmap_url': heatmap_url, 'original_image_url': img_path})
     except Exception as e:
         return jsonify({'error': str(e)})
 
