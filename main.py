@@ -32,6 +32,35 @@ cloudinary.config(
     api_secret=os.getenv("CLOUDINARY_API_SECRET")
 )
 
+def blend_images(background_path_or_url, overlay_path, alpha=0.5, save_path="blended_image.png"):
+    # If the background is a URL, fetch the image content
+    if background_path_or_url.startswith("http"):
+        response = requests.get(background_path_or_url)
+        response.raise_for_status()  # Check if the request was successful
+        background_image = Image.open(BytesIO(response.content))
+    else:
+        # Otherwise, assume it's a local file path
+        background_image = Image.open(background_path_or_url)
+
+    # Opening the secondary image (overlay image)
+    overlay_image = Image.open(overlay_path)
+
+    # Resize the overlay image to match the size of the primary image
+    overlay_image = overlay_image.resize(background_image.size)
+
+    # Convert both images to RGBA mode (assuming both are not in this mode)
+    background_image = background_image.convert("RGBA")
+    overlay_image = overlay_image.convert("RGBA")
+
+    # Blend the images with the specified alpha value
+    blended_image = Image.blend(background_image, overlay_image, alpha)
+
+    # Save the blended image
+    blended_image.save(save_path)
+
+    # Return the path to the saved image
+    return os.path.abspath(save_path)
+
 def generate_and_upload_heatmap(image_url):
     # Download image from URL
     response = requests.get(image_url)
@@ -77,6 +106,8 @@ def generate_and_upload_heatmap(image_url):
     # Save the result
     overlay_path = 'heatmap_overlay.png'
     cv2.imwrite(overlay_path, overlay)
+    
+    overlay_path = blend_images(image_url, overlay_path=overlay_path, alpha=0.5)
 
     # Upload the overlaid image to Cloudinary using the provided function
     overlay_cloud_url = upload_to_cloudinary(overlay_path)
@@ -128,6 +159,8 @@ def generate_and_upload_heatmap_xception(image_url):
     # Save the result
     overlay_path = 'heatmap_overlay.png'
     cv2.imwrite(overlay_path, overlay)
+    
+    overlay_path = blend_images(image_url, overlay_path=overlay_path, alpha=0.5)
 
     # Upload the overlaid image to Cloudinary using the provided function
     overlay_cloud_url = upload_to_cloudinary(overlay_path)
